@@ -1,10 +1,9 @@
 <h1>SpotvsFuture Bot</h1>
 
-The SpotvsFuture Bot is designed to optimize trading by executing maker orders in the spot market and taker orders in the futures market. This strategy aims to minimize fees and mitigate risk during execution.
+The SpotvsFuture Bot is designed to optimize trading by executing maker orders in the spot market and taker orders in the futures market. This strategy aims to minimize fees and mitigate risk during execution, trades in small clips to complete the total amount in a efficent way.
 
 <h3> Parameters </h3>
 Before using the bot, you need to set the following parameters:
-
 
 <h5> q (Total Quantity in USDT): </h5>
 
