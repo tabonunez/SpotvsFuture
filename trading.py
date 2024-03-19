@@ -176,11 +176,54 @@ class SporvsFuture():
          if abs(future_balance+position)<=0.03*future_balance:
               return True
          else:
-              return False
+              return False    def spot_order(self,decimals):
+                #Calculate quantity in spot terms
+                spot_order_quantity=self.conversion_USDTtoQ(self.symbolA,clipA,decimals)
+                #Create market making order on spot (limit order)
+                o=B.order_spot("BUY",self.symbolA,spot_order_quantity,B.get_bid(symbol=self.symbolA))
+                #Check clip order is not completed
+                return o
+    def open_leg(self,o,traded):
+                executed=B.exe_qty(symbol=self.symbolA,order_id=o['orderId'])
+                count=0
+                #Wait until order we placed gets any fills                  
+                while executed==traded or (executed-traded)*B.get_bid(symbol=self.symbolA)<=10: 
+                        with Halo(text='Order open, waiting for fills ', spinner='dots') as spinner:  
+                                count+=1
+                                check_price=self.check_price(self.symbolA,self.fut_symbolA)
+                                #Wait 120 secs to change order or cancel if price is no ok
+                                if count==120 or check_price==False:
+                                    #try to cancel, might be filled 
+                                    try:
+                                        B.cancel_order(self.symbolA,o['orderId'])
+                                        print("Canceled order")
+                                        break
+                                    except Exception as E:
+                                        print(E)
+                                        print("Order filled before cancel")
+                                        break
+                                time.sleep(1)
+                                return B.exe_qty(symbol=self.symbolA,order_id=o['orderId'])
+
+    def trasnfer_trade(self,executed,traded):
+                # The following code addresses potential discrepancies caused by Binance's rounding policies.   
+                if self.hold_spot==True:
+                    B.transfer(symbol=self.symbolA[:-4],q=executed-traded,type=3)
+                elif self.hold_spot==False:
+                    B.transfer(symbol=self.symbolA[:-4],q=B.spot_balance(self.symbolA[:-4]),type=3) 
+    def adjust_clip(self,o,fut_o):
+                last_trade_price=self.check_trade_price(o['orderId'],fut_o['orderId'])
+                if last_trade_price==False:
+                    clipA=self.clipA
+                    clipA=round(clipA*0.5,3)
+                    return True
+                #If price is above, clip is the one we set
+                elif last_trade_price==True:
+                    clipA=self.clipA
+                    return True
     def leg_a(self):
          q=self.q
          clipA=self.clipA
-
          decimals=self.get_decimals()
          while q>0:
             #Halo just gives a fancy loading format
@@ -196,59 +239,25 @@ class SporvsFuture():
                             traded=0
                             #Check that the order is not completed
                             if q>=self.clipA:  
-                                #Calculate quantity in spot terms
-                                spot_order_quantity=self.conversion_USDTtoQ(self.symbolA,clipA,decimals)
-                                #Create market making order on spot (limit order)
-                                o=B.order_spot("BUY",self.symbolA,spot_order_quantity,B.get_bid(symbol=self.symbolA))
-                                #Check clip order is not completed
+                                o=self.spot_order(decimals)
                                 while traded!=clipA:
-                                    executed=B.exe_qty(symbol=self.symbolA,order_id=o['orderId'])
-                                    count=0
-                                    #Wait until order we placed gets any fills                  
-                                    while executed==traded or (executed-traded)*B.get_bid(symbol=self.symbolA)<=10: 
-                                            with Halo(text='Order open, waiting for fills ', spinner='dots') as spinner:  
-                                                    count+=1
-                                                    check_price=self.check_price(self.symbolA,self.fut_symbolA)
-                                                    #Wait 120 secs to change order or cancel if price is no ok
-                                                    if count==120 or check_price==False:
-                                                        #try to cancel, might be filled 
-                                                        try:
-                                                            B.cancel_order(self.symbolA,o['orderId'])
-                                                            print("Canceled order")
-                                                            break
-                                                        except Exception as E:
-                                                            print(E)
-                                                            print("Order filled before cancel")
-                                                            break
-                                                    time.sleep(1)
-                                                    executed=B.exe_qty(symbol=self.symbolA,order_id=o['orderId'])
+                                    executed = self.open_leg(o,traded)
                                     spinner.stop()
-                                    #Update executed Q before checking  
+                                    #Update executed Q before checking, not nesesary, could be delated 
                                     executed=B.exe_qty(symbol=self.symbolA,order_id=o['orderId'])
                                     #Break if order been canceled, ensure there is no new fill
                                     if executed==traded:
                                             break
-                                    # The following code addresses potential discrepancies caused by Binance's rounding policies.   
-                                    if self.hold_spot==True:
-                                        B.transfer(symbol=self.symbolA[:-4],q=executed-traded,type=3)
-                                    elif self.hold_spot==False:
-                                        B.transfer(symbol=self.symbolA[:-4],q=B.spot_balance(self.symbolA[:-4]),type=3)                          
+                                    self.trasnfer_trade(executed,traded)
                                     print("Transfered from Spot to Futures account  %s  %s"%(executed-traded,self.symbolA))
                                     print("Hedging future leg..")
                                     #Create taking order in futures (market order)
-                                    fut_o=B.order_mkt_future('SELL',round((executed*B.get_trade_price(self.symbolA,o['orderId'])-traded)/10,0),self.fut_symbolA)
+                                    fut_o=B.order_mkt_future('SELL',round(((executed-traded)*B.get_trade_price(self.symbolA,o['orderId']))/10,0),self.fut_symbolA)
                                     traded=executed-traded
                                     print("Strategy Hedged")
                                     #If trade was below price, next trade is going to be 1/2 of the clip
-                                    last_trade_price=self.check_trade_price(o['orderId'],fut_o['orderId'])
-                                    if last_trade_price==False:
-                                        clipA=self.clipA
-                                        clipA=round(clipA*0.5,3)
-                                        break
-                                    #If price is above, clip is the one we set
-                                    elif last_trade_price==True:
-                                        clipA=self.clipA
-                                        break
+                                    if self.adjust_clip(o,fut_o) == True:
+                                         break
                                 q=q-traded*B.get_trade_price(self.symbolA,o['orderId'])
                                 print('----------------------------- Traded: %s  remaning quantity: %s -----------------------------'%(traded*B.get_trade_price(self.symbolA,o['orderId']),q) )
                             else:
